@@ -1,0 +1,183 @@
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a166a6cc071..f7234bf0782 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3398,25 +3398,54 @@ NTSTATUS WINAPI LdrUnloadDll( HMODULE hModule )
+  */
+ PIMAGE_NT_HEADERS WINAPI RtlImageNtHeader(HMODULE hModule)
+ {
+-    IMAGE_NT_HEADERS *ret;
++    PIMAGE_NT_HEADERS ret;
++    RtlImageNtHeaderEx( RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK, hModule, 0, &ret );
++    return ret;
++}
++
++/***********************************************************************
++ *           RtlImageNtHeaderEx (NTDLL.@)
++ */
++NTSTATUS WINAPI RtlImageNtHeaderEx(ULONG Flags, PVOID Base, ULONG64 Size,
++                                   PIMAGE_NT_HEADERS *OutHeaders)
++{
++    PIMAGE_NT_HEADERS headers;
++
++    if (!OutHeaders)
++        return STATUS_INVALID_PARAMETER;
++
++    *OutHeaders = NULL;
++
++    if (Base == NULL || Base == (void*)-1)
++        return STATUS_INVALID_PARAMETER;
++
++    if (Flags & ~RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK)
++        return STATUS_INVALID_PARAMETER;
++    else if (!(Flags & RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK))
++        FIXME( "ignoring range check\n" );
+ 
+     __TRY
+     {
+-        IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)hModule;
++        IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)Base;
+ 
+-        ret = NULL;
+         if (dos->e_magic == IMAGE_DOS_SIGNATURE)
+         {
+-            ret = (IMAGE_NT_HEADERS *)((char *)dos + dos->e_lfanew);
+-            if (ret->Signature != IMAGE_NT_SIGNATURE) ret = NULL;
++            headers = (IMAGE_NT_HEADERS *)((char *)dos + dos->e_lfanew);
++
++            if (headers->Signature != IMAGE_NT_SIGNATURE)
++                return STATUS_INVALID_IMAGE_FORMAT;
+         }
++        else
++            return STATUS_INVALID_IMAGE_FORMAT;
+     }
+     __EXCEPT_PAGE_FAULT
+     {
+-        return NULL;
++        return STATUS_INVALID_IMAGE_FORMAT;
+     }
+     __ENDTRY
+-    return ret;
++
++    *OutHeaders = headers;
++    return STATUS_SUCCESS;
+ }
+ 
+ /***********************************************************************
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 185dd6767eb..2980a014a49 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -745,6 +745,7 @@
+ @ stdcall RtlIdnToUnicode(long wstr long ptr ptr)
+ @ stdcall RtlImageDirectoryEntryToData(long long long ptr)
+ @ stdcall RtlImageNtHeader(long)
++@ stdcall RtlImageNtHeaderEx(long ptr int64 ptr)
+ @ stdcall RtlImageRvaToSection(ptr long long)
+ @ stdcall RtlImageRvaToVa(ptr long long ptr)
+ @ stdcall RtlImpersonateSelf(long)
+diff --git a/dlls/ntdll/tests/info.c b/dlls/ntdll/tests/info.c
+index 85c523881ef..3d2962b7fcf 100644
+--- a/dlls/ntdll/tests/info.c
++++ b/dlls/ntdll/tests/info.c
+@@ -3031,6 +3031,70 @@ static void test_debug_object(void)
+     ok( event.u.LoadDll.fUnicode == TRUE, "event not updated %x\n", event.u.LoadDll.fUnicode );
+ }
+ 
++static void test_image_nt_headers(void)
++{
++    NTSTATUS status;
++    PIMAGE_NT_HEADERS headers;
++
++    struct {
++        IMAGE_DOS_HEADER dos;
++        IMAGE_NT_HEADERS32 nt;
++    } dll = { 0 };
++
++    status = RtlImageNtHeaderEx( 0, NULL, 0, NULL );
++    ok( status == STATUS_INVALID_PARAMETER, "got %08x\n", status );
++
++    headers = (void*) 0xdeadbeef;
++    status = RtlImageNtHeaderEx( 0, NULL, 0, &headers );
++    ok( status == STATUS_INVALID_PARAMETER, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++
++    headers = (void*) 0xdeadbeef;
++    status = RtlImageNtHeaderEx( 0, (void*)-1, 0, &headers );
++    ok( status == STATUS_INVALID_PARAMETER, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++
++    headers = (void*) 0xdeadbeef;
++    /* test an unmapped address */
++    status = RtlImageNtHeaderEx( RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK, (void*)-2, 0, &headers );
++    ok( status == STATUS_INVALID_IMAGE_FORMAT, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++
++    dll.dos.e_magic = IMAGE_DOS_SIGNATURE;
++    dll.dos.e_lfanew = (char*)&dll.nt - (char*)&dll;
++    dll.nt.Signature = IMAGE_NT_SIGNATURE;
++
++    headers = (void*) 0xdeadbeef;
++    status = RtlImageNtHeaderEx( RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK, &dll, 0, &headers );
++    ok( status == STATUS_SUCCESS, "got %08x\n", status );
++    ok( headers == (void*)&dll.nt, "got %08x\n", headers );
++
++    headers = (void*) 0xdeadbeef;
++    status = RtlImageNtHeaderEx( 0, &dll, 0, &headers );
++    todo_wine ok( status == STATUS_INVALID_IMAGE_FORMAT, "got %08x\n", status );
++    todo_wine ok( headers == NULL, "got %08x\n", headers );
++
++    headers = (void*) 0xdeadbeef;
++    /* test invalid flag */
++    status = RtlImageNtHeaderEx( 0x80000, &dll, 0, &headers );
++    ok( status == STATUS_INVALID_PARAMETER, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++
++    headers = (void*) 0xdeadbeef;
++    dll.nt.Signature = 0;
++    status = RtlImageNtHeaderEx( RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK, &dll, 0, &headers );
++    ok( status == STATUS_INVALID_IMAGE_FORMAT, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++
++    dll.nt.Signature = IMAGE_NT_SIGNATURE;
++
++    headers = (void*) 0xdeadbeef;
++    dll.dos.e_magic = 0;
++    status = RtlImageNtHeaderEx( RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK, &dll, 0, &headers );
++    ok( status == STATUS_INVALID_IMAGE_FORMAT, "got %08x\n", status );
++    ok( headers == NULL, "got %08x\n", headers );
++}
++
+ START_TEST(info)
+ {
+     char **argv;
+@@ -3096,6 +3160,7 @@ START_TEST(info)
+     test_readvirtualmemory();
+     test_queryvirtualmemory();
+     test_NtGetCurrentProcessorNumber();
++    test_image_nt_headers();
+ 
+     test_ThreadEnableAlignmentFaultFixup();
+ }
+diff --git a/include/winternl.h b/include/winternl.h
+index 76feca83596..ba813d85199 100644
+--- a/include/winternl.h
++++ b/include/winternl.h
+@@ -2411,6 +2411,8 @@ typedef void (NTAPI *RTL_WAITORTIMERCALLBACKFUNC)(PVOID,BOOLEAN); /* FIXME: not
+ #define RTL_REGISTRY_HANDLE       0x40000000
+ #define RTL_REGISTRY_OPTIONAL     0x80000000
+ 
++#define RTL_IMAGE_NT_HEADER_EX_FLAG_NO_RANGE_CHECK 1
++
+ #define RTL_QUERY_REGISTRY_SUBKEY         0x00000001
+ #define RTL_QUERY_REGISTRY_TOPKEY         0x00000002
+ #define RTL_QUERY_REGISTRY_REQUIRED       0x00000004
+@@ -3665,6 +3667,7 @@ NTSYSAPI NTSTATUS  WINAPI RtlIdnToNameprepUnicode(DWORD,const WCHAR*,INT,WCHAR*,
+ NTSYSAPI NTSTATUS  WINAPI RtlIdnToUnicode(DWORD,const WCHAR*,INT,WCHAR*,INT*);
+ NTSYSAPI PVOID     WINAPI RtlImageDirectoryEntryToData(HMODULE,BOOL,WORD,ULONG *);
+ NTSYSAPI PIMAGE_NT_HEADERS WINAPI RtlImageNtHeader(HMODULE);
++NTSYSAPI NTSTATUS  WINAPI RtlImageNtHeaderEx(ULONG,PVOID,ULONG64,PIMAGE_NT_HEADERS *);
+ NTSYSAPI PIMAGE_SECTION_HEADER WINAPI RtlImageRvaToSection(const IMAGE_NT_HEADERS *,HMODULE,DWORD);
+ NTSYSAPI PVOID     WINAPI RtlImageRvaToVa(const IMAGE_NT_HEADERS *,HMODULE,DWORD,IMAGE_SECTION_HEADER **);
+ NTSYSAPI NTSTATUS  WINAPI RtlImpersonateSelf(SECURITY_IMPERSONATION_LEVEL);
+
