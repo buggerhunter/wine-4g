@@ -14,6 +14,7 @@ The build process is based completely on "wine-docker-builder" so it is recommen
 now you are inside the docker container use the one of the following commands to compile
 - `wine-tkg-build wine-4g.cfg` - for building wine-4g
 - `proton-tkg-build proton-4g.cfg` - for building proton-4g
+The compilation result are inside "wine-docker-builder/outputs" folder
 # FAQ
 ## Compilation failed on applying patches
 if the compilation failed on applying patches you need to wait until [wine-tkg](https://github.com/Frogging-Family/wine-tkg-git) will fix the patches or try to build older version
