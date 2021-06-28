@@ -7,7 +7,7 @@ echo "pulling last changes from wine-docker-builder..."
 git pull
 popd > /dev/null
 echo "creating hardlinks to all patches and config files into wine-docker-builder"
-cp -vl patches/*.mypatch wine-docker-builder/resources/patches
-cp -vl configs/*.cfg wine-docker-builder/resources/configs
+cp -vfl patches/*.mypatch wine-docker-builder/resources/patches
+cp -vfl configs/*.cfg wine-docker-builder/resources/configs
 echo "all is ready now get inside \"https://github.com/codehungers/wine-docker-builder\" for instructions of the build process"
 
