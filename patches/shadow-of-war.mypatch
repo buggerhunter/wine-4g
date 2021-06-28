@@ -1,0 +1,53 @@
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index e2d5f855372..e4caed9d280 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -883,6 +883,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+     data_size_t len;
+     struct object_attributes *objattr;
+     struct ntdll_thread_data *thread_data;
++    DWORD pid = 0;
+     DWORD tid = 0;
+     int request_pipe[2];
+     TEB *teb;
+@@ -943,6 +944,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+         if (!(status = wine_server_call( req )))
+         {
+             *handle = wine_server_ptr_handle( reply->handle );
++            pid = reply->pid;
+             tid = reply->tid;
+         }
+         close( request_pipe[0] );
+@@ -966,7 +968,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+         goto done;
+     }
+ 
+-    set_thread_id( teb, GetCurrentProcessId(), tid );
++    set_thread_id( teb, pid, tid );
+ 
+     thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+     thread_data->request_fd  = request_pipe[1];
+diff --git a/server/protocol.def b/server/protocol.def
+index 1f7dc4eaaec..6ef5922c543 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -881,6 +881,7 @@ struct cpu_topology_override
+     int          request_fd;   /* fd for request pipe */
+     VARARG(objattr,object_attributes); /* object attributes */
+ @REPLY
++    process_id_t pid;          /* process id */
+     thread_id_t  tid;          /* thread id */
+     obj_handle_t handle;       /* thread handle (in the current process) */
+ @END
+diff --git a/server/thread.c b/server/thread.c
+index dd13da7a94c..65160235380 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1434,6 +1434,7 @@ DECL_HANDLER(new_thread)
+     {
+         thread->system_regs = current->system_regs;
+         if (req->suspend) thread->suspend++;
++        reply->pid = get_process_id( process );
+         reply->tid = get_thread_id( thread );
+         if ((reply->handle = alloc_handle_no_access_check( current->process, thread,
+                                                            req->access, objattr->attributes )))
